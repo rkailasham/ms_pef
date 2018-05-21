@@ -1,95 +1,155 @@
-C     MARKO-SIGGIA DUMBBELLS WITH 
+c     MARKO-SIGGIA DUMBBELLS WITH 
 C     INTERNAL VISCOSITY
 c     + EXCLUDED VOLUME INTERACTIONS 
 C     + HYDRODYNAMIC INTERACTIONS
 C     SECOND ORDER SEMI-IMPLICIT PREDICTOR-CORRECTOR ALGORITHM
 c
 c     NOTE : WHEN RUNNING EQUILIBRIUM SIMULATIONS, DIVERT PROGRAM
-c     FLOW FROM ENTERING TEXTRA. WHEN SR=0.0, MATERIAL FUNCTIONS BECOME UNDEFINED.
+c     FLOW FROM ENTERING TEXTRA. WHEN SR=0.0, MATERIAL FUNCTIONS BECOME
+c     UNDEFINED.
 C     THIS CREATES HAVOC WITH TEXTRA
+C
+c     2-APR-2018  : FINDING THE RIGHT SOLUTION FROM THE
+C     THREE ROOTS GIVEN BY THE CUBIC EQUATION SOLVER
 C
 c     3-APR-2018  : DISCRIMINANT OF CUBIC EQUATIONS FOR  
 c     MARKO-SIGGIA CASE IS POSITIVE, CANNOT USE TRIG. SOLVER
-c     HAVE IMPLEMENTED NEWTON-RAPHSON+POLISHING(AS DONE IN
-C     THE SINGLE CHAIN CODE)     
+c     HAVE IMPLEMENTED NEWTON-RAPHSON+POLISHING    
+c
+c     SEE SUPPLEMENTARY INFORMATION OF SCHROEDER'S PAPER
+C     ["Nonequilibrium thermodynamics of dilute polymer solutions in flow"
+C     JCP 141, 174903 (2014)]
+C     TO UNDERSTAND REGIME 1,2,3
+C
+
+
+
 
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      PARAMETER (NDATM=50,NOUT=100) 
+      PARAMETER (NDATM=50,NOUT1=50,NOUT=10,NOUT3=1000) 
       PARAMETER (NBINS=50)
+      PARAMETER (NDB=10000000)
+      PARAMETER (PI = 3.1415926535897931D0)
       REAL*8 FENFAC,TEMPB
+      REAL*8 META1,MPSI2
       REAL*8 AQ2,MQ2,VQ2
       REAL*8 QMAG,QLEN,TEMP12,TEMP23
+      REAL*8 METE,METD,MET
+      REAL*8 META
+      REAL*8 AVQ1(NOUT1),MEQ1,ERQ1(NOUT1)
       REAL*8 AVQ2(NOUT),MEQ2,ERQ2(NOUT)
+      REAL*8 AVQ3(NOUT3),MEQ3,ERQ3(NOUT3)
+      REAL*8 AVTE(NOUT),ERTE(NOUT)
+      REAL*8 AVTD(NOUT),ERTD(NOUT)
+      REAL*8 AVT(NOUT),ERT(NOUT)
+      REAL*8 AVETA(NOUT),ERETA(NOUT)
+      REAL*8 AVETA1(NOUT),ERETA1(NOUT)
+      REAL*8 AVPSI2(NOUT),ERPSI2(NOUT)
       REAL*8 DTARR(10) 
       REAL*8 XARR(NDATM),YARR(NDATM),SIGARR(NDATM) 
       REAL*8 TEMP1(NDATM, NOUT),TEMP2(NDATM, NOUT),TEMP3(NDATM, NOUT)
       REAL*8 OUTIME(NOUT)
+      REAL*8 ESR(NOUT1),TSR(NOUT),RSR(NOUT3)
       REAL*8 Q(3)
+      REAL*8 DB(NDB,3)
       REAL*8 EQBFAC
+      REAL*8 RAMP,CF1,CF2
+      REAL*8 QAV1,QER1,QAV3,QER3,FWAV1,FWER1,FWAV3,FWER3
+      REAL*8 AVW,ERW,MEW,AW,VW
+C      REAL*8 KAPPA(3,3)
+      REAL*8 KAPPA_TEMP(3,3),FLOW_TMP(3,3)
+      REAL*8 WORK2(NDB)
+      REAL*8 DELF,ER_DELF
       INTEGER NTIARR(10) 
       INTEGER TIME (8)
+      CHARACTER*1 TAB  
       CHARACTER (LEN=12) CLK(3)
-      REAL*8 KAPPA_TEMP(3,3),FLOW_TMP(3,3)
+      CHARACTER (LEN=512) FPATH
+      CHARACTER (LEN=512) CPATH
+      PARAMETER(FPATH="/home/rkai0001/wm73/rkai0001/marko_siggia/ms_data
+     &base/b477/eqbconfigs.dat")
+      PARAMETER(CPATH="finconfigs.dat")
       COMMON /STEPBL/ THI,B,ZMU,RMU2,BAUXQ,BAUXR,DTH,DTQ,SRDT,
      &SRDTH,C1P,C2P,E,AMPL2,BETA,AB,A2,A4,AUX1,AUX2,
      &AUX3,AUX4,AUX5,S,QALPH,GEE1,GEE2,GEE3,GEE4,FKAPPA(3,3),COEFF(4) 
       COMMON /EXTRP/ NOPT,NDUOPT,XOPT,YOPT,SIGOPT,ALIOPT,VLIOPT 
-
+      LOGICAL THERE
+      LOGICAL CTHERE
 c      INTEGER :: THI
 C     Excluded-volume and FENE parameters 
 c     Z = Solvent Quality, RMU = EV parameter, B= FENE parameter
-c     SR = Shear Rate, E = IV PARAMETER,
+c     SR1 = INITIAL PECLET NUMBER, SR2=FINAL PECLET NUMBER 
+C     E = IV PARAMETER,
 C     H0 = HYDRODYNAMIC INTERACTION PARAMETER
+c     B_RAD = BEAD_RADIUS, IN DIMENSIONLESS UNITS
 C     THI = EXPRESSION TO 
 C     BE USED OFR THE HYDRODYNAMIC INTERACTION TENSOR.
 C     THI = 1 FOR REGULARIZED OSEEN-BURGER
 C     THI = 2 FOR ROTNE-PRAGER-YAMAKAWA 
-C     NFLOW DECIDES TYPE OF FLOW TENSOR
-C    (1) FOR STEADY SHEAR
-C    (2) FOR PLANAR ELONGATION
-C    (3) FOR UNIAXIAL ELONGATION
-
       open (unit=1, file='inp.dat') 
-      READ (1,*) Z,RMU,B,SR,E,H0,THI,NFLOW 
+      READ (1,*) Z,RMU,B,SR1,SR2,CIV,ETA_S,B_RAD,THI,INPAR,NFLOW 
       open (unit=2, file='tstep.dat') 
-      open (unit=7, file='q2.dat', STATUS='UNKNOWN')
-      open (unit=113, file='eqbconfigs.dat',STATUS='UNKNOWN')
-      TMAX=10.D0
+c      open (unit=3, file='eta1.dat',STATUS='UNKNOWN')
+      open (unit=91, file='q2_r1.dat', STATUS='UNKNOWN')
+      open (unit=7, file='q2_r2.dat', STATUS='UNKNOWN')
+      open (unit=8, file='q2_r3.dat', STATUS='UNKNOWN')
+      open (unit=10, file='output.dat', STATUS='UNKNOWN')
+      open (unit=11, file='work_traj.dat', STATUS='UNKNOWN')
+
+      INQUIRE (FILE=FPATH,EXIST=THERE)
+      INQUIRE (FILE=CPATH,EXIST=CTHERE)
+
+C     REGIME 1
+      TEQB=5.D0
+C     REGIME 2
+      TMAX=1.D0
+C     REGIME 3
+      TREL=100.D0
+
+c
+
       READ (2,*) NTIWID, NTRAJ
       DO 15 I = 1, NTIWID
           READ (2,*) NTIARR(I)
           DTARR(I)=TMAX/NTIARR(I)
 15    CONTINUE
 
+      TAB=CHAR(9)
+      E=CIV/(3.D0*PI*ETA_S*B_RAD)
+
 C 
       ZMU=Z/RMU**(5.D0) 
       RMU2=(2.D0)*RMU*RMU
-      SRTEMP=SR
       NTHI=NINT(THI) 
-C 
+
+c     WRITE FORMATS
+
+
+45    FORMAT(F20.16)
+8     FORMAT(I10,4X,F20.16,4X,F20.16,4X,F20.16)
+9     FORMAT(F11.8,4X,F30.16,4X,F30.16,4X,F30.16)
+4     FORMAT(F11.8,4X,F10.5,4X,F30.12,4X,F30.12) 
+23    FORMAT(I12)
+24    FORMAT(F24.16) 
+29    FORMAT(I8,4X,F12.5)
+81    FORMAT(1A,F12.5,2X,1A,F12.5)
+
+C     DECIDES TYPE OF HI TENSOR TO BE USED : (1) REGULARIZED OSEEN-BURGERS (ROB) 
+C                                            (2) ROTNE-PRAGER-YAMAKAWA (RPY)
       SELECT CASE (NTHI)
           CASE (1)
               WRITE(*,*) "THI : ",THI
               WRITE(*,*) "TYPE OF HI : ROBT"
-              IF(H0.EQ.0) THEN
-                  WRITE(*,*) "H0=0; SETTING THI=3"
-                  THI=3.D0
-              ENDIF
+              AB=B_RAD
           CASE (2)
               WRITE(*,*) "THI : ",THI
               WRITE(*,*) "TYPE OF HI : RPY"
-              IF(H0.EQ.0) THEN
-                  WRITE(*,*) "H0=0; SETTING THI=3"
-                  THI=3.D0
-              ENDIF
-          CASE DEFAULT
+              AB=B_RAD 
+         CASE DEFAULT
               WRITE(*,*) "HI OPTION NOT VALID"
               WRITE(*,*) "SETTING H0=0.0"
-              H0=0.D0
+              AB=0.D0
       END SELECT
-
-      CALL CPU_TIME(STARTTIME)
-
 
 C    DECIDES ON THE TYPE OF VELOCITY FIELD TO BE IMPOSED ON SYSTEM : 
 C    (1) FOR STEADY SHEAR
@@ -102,7 +162,7 @@ C    (3) FOR UNIAXIAL ELONGATION
               FKAPPA(I,J)=0.D0
               FLOW_TMP(I,J)=0.D0
 76        CONTINUE
-75    CONTINUE
+75    CONTINUE 
 
       SELECT CASE (NFLOW)
           CASE (1)
@@ -126,19 +186,78 @@ C    (3) FOR UNIAXIAL ELONGATION
      &ATION OR NFLOW=3 FOR UNIAXIAL ELONGATION"
       END SELECT
 
-      PI=3.1415926535897931D0
-      AB=SQRT(PI)*H0
+C     STORING THE FLOW TENSOR. HELPS IN SWITCHING FROM
+C     EQUILIBRATION TO PRODUCTION RUNS
+      DO 112 I=1,3
+          DO 113 J=1,3
+              KAPPA_TEMP(I,J)=FLOW_TMP(I,J)*SR1
+113        CONTINUE
+112    CONTINUE 
+
+
+      CALL CPU_TIME(STARTTIME)
+
+C     DECIDES IF INPUT CONFIGS ARE TAKEN FROM (1) EQUILIBRATED DATABASE OR
+C     (2) SAVED CONFIGS FROM PREVIOUS RUN 
+
+
+      SELECT CASE (INPAR)
+          CASE (1)
+              WRITE(*,*) "INPAR : ",INPAR
+              IF(THERE)THEN
+                  OPEN(UNIT=114,file=FPATH)
+                  WRITE(*,*) "LOADING FROM EQUILIBRATED DATABASE.."
+                  DO 12 I=1,NDB
+                      READ(114,8) K,DB(I,1),DB(I,2),DB(I,3)
+12                CONTINUE
+                  CLOSE(UNIT=114)
+              ELSE
+                  STOP "eqbconfigs.dat file not found. Execution 
+     &terminated"
+              ENDIF  
+              ISEED=20171113              
+              EQBFAC=0.D0
+C             When loading from equilibrated database, regime 1 
+c             is forced to be the equilibration regime
+c              SR1=0.D0
+              WRITE(*,*) "LOADED DATABASE"
+          CASE (2)
+              WRITE(*,*) "INPAR : ",INPAR
+              IF(CTHERE)THEN
+                  OPEN(UNIT=115,file=CPATH)
+                  WRITE(*,*) "READING FROM FINAL CONFIGS OF PREVIOUS 
+     &RUN.."
+                  DO 13 I=1,(NTIWID*NTRAJ)
+                      READ(115,9) TIMEI,DB(I,1),DB(I,2),DB(I,3)
+13                CONTINUE
+                  READ(115,*) ISEED
+                  CLOSE(UNIT=115)
+              ELSE
+                  STOP "finconfigs.dat file not found. Execution 
+     &terminated"
+              ENDIF
+              EQBFAC=1.D0
+          CASE DEFAULT
+              WRITE(*,*) "READ_FROM_INPUT OPTION NOT VALID"
+              STOP "USE INPAR=1 FOR EQB DBASE, INPAR=2 FOR RESUMING 
+     &FROM PREVIOUS RUN"
+      END SELECT
+
+      H0=AB/SQRT(PI)
       A2=AB*AB
       A4=A2*A2
-45    FORMAT(F20.16)
       WRITE(*,45) E
-      WRITE(*,45) H0
+      WRITE(*,45) AB
 
-   
-c      CALL CPU_TIME(STARTTIME)
+
+      RAMP=(SR2-SR1)/(TMAX)
+
+      open (unit=112,file='finconfigs.dat',STATUS='UNKNOWN')
+
+C     Loop for different time step widths 
+
       DO 1000 IDT=1,NTIWID
 C        Auxiliary parameters 
-c         OPEN(UNIT=114,file=FPATH)
          WRITE(*,*) "DOING TIMESTEP WIDTH : ",DTARR(IDT)
          DELTAT=DTARR(IDT) 
          TEMPDT=DELTAT
@@ -149,119 +268,377 @@ c         OPEN(UNIT=114,file=FPATH)
          C1P=14.14855378D0*SQDT 
          C2P=1.21569221D0*SQDT 
          
-
 C     Initializing averages and errors... 
 C     AV... ARE AVERAGES OF CORRESPONDING MATL. FNS. OVER
 C     ALL THE BLOCKS; ER... ARE STANDARD ERRORS FOR THE CORR-
 C     -ESPONDING MATL. FNS.
+
+         DO 86 I=1,NOUT1
+             AVQ1(I)=0.D0
+             ERQ1(I)=0.D0
+86       CONTINUE
+
          DO 25 I=1,NOUT
              AVQ2(I)=0.D0
              ERQ2(I)=0.D0
+             AVETA1(I)=0.D0
+             ERETA1(I)=0.D0
 25       CONTINUE
+
+         DO 85 I=1,NOUT3
+             AVQ3(I)=0.D0
+             ERQ3(I)=0.D0
+85       CONTINUE
+
+         QAV1=0.D0
+         QER1=0.D0
+         QAV3=0.D0
+         QER3=0.D0
+         FWAV1=0.D0
+         FWER1=0.D0
+         FWAV3=0.D0
+         FWER3=0.D0
+
+
+
 
 C        A FRESH SEED IS GIVEN FOR EACH TIME-STEP WIDTH
 C        TO ENSURE NON-OCCURENCE OF PERIOD EXHAUSTION
 
-c         CALL DATE_AND_TIME(CLK(1),CLK(2),CLK(3),TIME)
-c         ISEED=TIME(8)*100000+TIME(7)*1000+TIME(6)*10+TIME(5)
-c         ISEED=ISEED+13998         
-         ISEED=2231158
+         CALL DATE_AND_TIME(CLK(1),CLK(2),CLK(3),TIME)
+         ISEED=TIME(8)*100000+TIME(7)*1000+TIME(6)*10+TIME(5)
+         ISEED=ISEED+111555         
          CALL RANILS(ISEED)
+         CALL SRAND(ISEED)
+
 
          DO 100 ITRAJ=1,NTRAJ 
         
-             Q(1)=RANGLS()
-             Q(2)=RANGLS()
-             Q(3)=RANGLS()
+             WORK2(ITRAJ)=0.D0
+             PICK=RAND()
+             NSEED=NSEED+1
+             CHANGE=NDB*PICK
+             IF(INPAR.EQ.1)THEN
+                 NCHOOSE=NINT(CHANGE)
+             ELSE
+                 NCHOOSE=((IDT-1)*NTRAJ)+(ITRAJ)
+             ENDIF 
+             Q(1)=DB(NCHOOSE,1)
+             Q(2)=DB(NCHOOSE,2)
+             Q(3)=DB(NCHOOSE,3)
+
+
 
              IF(MODULO(ITRAJ,1000).EQ.0)THEN
              WRITE(*,*) "STATUS : EQB.TIME-STEP WIDTH : ",DELTAT,
      &"TRAJ # ",ITRAJ
              ENDIF
-c             WRITE(*,*) "EQUILIBRATION AT SR = ",SR 
-C            Relaxation of initial conditions
-             NEQB=20.D0/DELTAT
+
+             NFIRST=1.D0/DELTAT
+             DO 40 ITIME=1,NFIRST
+                CALL SEMIMP(Q)
+40           CONTINUE
+
              DO 78 I=1,3
                  DO 79 J=1,3
-                     FKAPPA(I,J)=0.D0
+                     FKAPPA(I,J)=FLOW_TMP(I,J)*SR1
 79               CONTINUE
-78           CONTINUE
+78           CONTINUE 
+ 
+
+             NSEC=100.D0/DELTAT
+             DO 55 ITIME=1,NSEC
+                CALL SEMIMP(Q)
+55           CONTINUE
+
+c            REGIME 1 : RELAXATION OF INITIAL CONDITION
+C            Relaxation of initial condition for 1 dimensionless time
+c            irrespective of whether starting from equilibrated database
+c            or finconfigsdat
+
+             DO 95 I=1,3
+                 DO 96 J=1,3
+                     FKAPPA(I,J)=FLOW_TMP(I,J)*SR1
+96               CONTINUE
+95           CONTINUE 
+             CF1=FKAPPA(1,1)
+             CF2=FKAPPA(2,2)
+
+             NEQB=TEQB/DELTAT
+             IWAIT=0
+             IOUT=0
 
              DO 50 ITIME=1,NEQB
                 CALL SEMIMP(Q)
+                IWAIT=IWAIT+1
+                IF (IWAIT.EQ.NTIME) THEN
+                    IWAIT=0
+                    IOUT=IOUT+1
+                    ESR(IOUT)=FKAPPA(1,1)
+                    QMAG=Q(1)*Q(1) + Q(2)*Q(2) + Q(3)*Q(3)
+                    MEQ1=SQRT(QMAG)
+                    AVQ1(IOUT)=AVQ1(IOUT)+(MEQ1)
+                    ERQ1(IOUT)=ERQ1(IOUT)+(MEQ1*MEQ1)
+                ENDIF
 50           CONTINUE
-C 
-             DO 95 I=1,3
-                 DO 96 J=1,3
-                     FKAPPA(I,J)=FLOW_TMP(I,J)*SR
-96               CONTINUE
-95           CONTINUE
+             QMAG=Q(1)*Q(1) + Q(2)*Q(2) + Q(3)*Q(3)
+             MEQ1=SQRT(QMAG)
 
-c             WRITE(*,*) "PRODUCTION AT SR = ",SR 
+             QAV1=QAV1+(MEQ1)
+             QER1=QER1+(MEQ1*MEQ1)
+               
+             TEMP12=SR1*(Q(1)*Q(1) - Q(2)*Q(2))
+             FWAV1=FWAV1+(TEMP12)
+             FWER1=FWER1+(TEMP12*TEMP12)
+c            REGIME 2 : GRADUALLY RAMPING UP PECLET NUMBER
+C            [Pe IS SAME AS DIMENSIONLESS SHEAR/ELONGATION RATE]
+
+
              IWAIT=0
              IOUT=0
 C
+
 C           Time integration: semi-implicit predictor-corrector scheme 
              DO 10 ITIME=1,NTIARR(IDT) 
+                 DO 115 I=1,3
+                     DO 116 J=1,3
+                         FKAPPA(I,J)=FKAPPA(I,J)+(DELTAT*RAMP*
+     &FLOW_TMP(I,J))
+116                  CONTINUE
+115              CONTINUE 
+
                  CALL SEMIMP(Q) 
                  IWAIT=IWAIT+1
+                 QMAG =Q(1)*Q(1) + Q(2)*Q(2) + Q(3)*Q(3)
+                 TEMP12=(Q(1)*Q(1) - Q(2)*Q(2))
+                 TEMP23=(Q(1)*Q(1)-0.5D0*Q(2)*Q(2)-0.5D0*Q(3)*Q(3))
                  IF (IWAIT.EQ.NTIME) THEN
                      IWAIT=0
                      IOUT=IOUT+1
-                     QMAG =Q(1)*Q(1) + Q(2)*Q(2) + Q(3)*Q(3)
-                     AVQ2(IOUT)=AVQ2(IOUT)+(QMAG)
-                     ERQ2(IOUT)=ERQ2(IOUT)+(QMAG*QMAG)
-                 ENDIF
-10           CONTINUE 
+                     TSR(IOUT)=FKAPPA(1,1)
+                     MEQ2=SQRT(QMAG)
+ 
+                     AVQ2(IOUT)=AVQ2(IOUT)+(MEQ2)
+                     ERQ2(IOUT)=ERQ2(IOUT)+(MEQ2*MEQ2)
 
-             IF(IDT.EQ.NTIWID)THEN
-                 WRITE(113,8) ITRAJ,Q(1),Q(2),Q(3)
-             ENDIF
-8            FORMAT(I10,4X,F20.16,4X,F20.16,4X,F20.16)
+c                     META1=((GEE3*TEMP12)/(1.D0-(QMAG/B)))+
+c     &(2.D0*E*GEE3*SR2*TEMP12*TEMP12/QMAG)+(E*GEE4*TEMP12/QMAG)
+c                     META1=META1/(4.D0*SR2)
+
+c                     META1=((GEE3*TEMP12)/(1.D0-(QMAG/B)))+
+c     &(2.D0*E*GEE3*SR2*TEMP23*TEMP12/QMAG)+(E*GEE4*TEMP12/QMAG)
+c                     META1=META1/(SR2)
+
+c                     AVETA1(IOUT)=AVETA1(IOUT)+(META1)
+c                     ERETA1(IOUT)=ERETA1(IOUT)+(META1*META1)
+                 ENDIF
+                 WORK2(ITRAJ)=WORK2(ITRAJ)+(DELTAT*RAMP*TEMP12)
+10           CONTINUE 
+C 
+
+c            REGIME 3 : RELAXATION AT FINAL CONDITION
+             DO 119 I=1,3
+                 DO 120 J=1,3
+                     FKAPPA(I,J)=FLOW_TMP(I,J)*SR2
+120              CONTINUE
+119          CONTINUE 
+
+             NFIN=TREL/DELTAT
+             IWAIT=0
+             IOUT=0
+
+C           Time integration: semi-implicit predictor-corrector scheme 
+             DO 20 ITIME=1,NFIN
+                 CALL SEMIMP(Q) 
+                 IWAIT=IWAIT+1 
+                 IF (IWAIT.EQ.NTIME) THEN
+                     IWAIT=0
+                     IOUT=IOUT+1
+                     RSR(IOUT)=FKAPPA(1,1)
+                     QMAG=Q(1)*Q(1) + Q(2)*Q(2) + Q(3)*Q(3)
+                     MEQ3=SQRT(QMAG)
+                     AVQ3(IOUT)=AVQ3(IOUT)+(MEQ3)
+                     ERQ3(IOUT)=ERQ3(IOUT)+(MEQ3*MEQ3)
+                 ENDIF
+20           CONTINUE 
+             WRITE(112,9) DELTAT,Q(1),Q(2),Q(3)
+
+             QMAG=Q(1)*Q(1) + Q(2)*Q(2) + Q(3)*Q(3)
+             MEQ3=SQRT(QMAG)
+
+             QAV3=QAV3+(MEQ3)
+             QER3=QER3+(MEQ3*MEQ3)
+      
+             TEMP12=SR2*(Q(1)*Q(1) - Q(2)*Q(2))
+             FWAV3=FWAV3+(TEMP12)
+             FWER3=FWER3+(TEMP12*TEMP12)
 
 100      CONTINUE 
-C 
+
 C        Averages, statistical errors 
 
+         DO 94 I=1,NOUT1
+             AVQ1(I)=AVQ1(I)/NTRAJ
+             ERQ1(I)=ERQ1(I)/NTRAJ
+             ERQ1(I)=(ERQ1(I)-AVQ1(I)*AVQ1(I))/(NTRAJ-1)
+             ERQ1(I)=SQRT(ERQ1(I))
+             OUTIME1=(NTIME*I*DELTAT)
+c        Output of results 
+             WRITE(91,4) ESR(I),OUTIME1,AVQ1(I),ERQ1(I)
+94       CONTINUE
+
          DO 35 I=1,NOUT
-             
              AVQ2(I)=AVQ2(I)/NTRAJ
              ERQ2(I)=ERQ2(I)/NTRAJ
              ERQ2(I)=(ERQ2(I)-AVQ2(I)*AVQ2(I))/(NTRAJ-1)
              ERQ2(I)=SQRT(ERQ2(I))
 
-             OUTIME1=NTIME*I*DELTAT
+c             AVETA1(I)=AVETA1(I)/NTRAJ
+c             ERETA1(I)=ERETA1(I)/NTRAJ
+c             ERETA1(I)=(ERETA1(I)-AVETA1(I)*AVETA1(I))/(NTRAJ-1)
+c             ERETA1(I)=SQRT(ERETA1(I))
+             OUTIME2=OUTIME1+(NTIME*I*DELTAT)
 c        Output of results 
-             WRITE(7,4)  DELTAT,OUTIME1,AVQ2(I),ERQ2(I)
+c             WRITE(3,4) SR2,OUTIME1,AVETA1(I),ERETA1(I)
+             WRITE(7,4) TSR(I),OUTIME2,AVQ2(I),ERQ2(I)
 35       CONTINUE
-c1        FORMAT(F11.8,4X,F6.2,2X,F16.5,2X,F16.5)
-4        FORMAT(F11.8,4X,F10.5,4X,F30.12,4X,F30.12) 
-c         CLOSE(UNIT=114)
+
+
+         DO 36 I=1,NOUT3
+             AVQ3(I)=AVQ3(I)/NTRAJ
+             ERQ3(I)=ERQ3(I)/NTRAJ
+             ERQ3(I)=(ERQ3(I)-AVQ3(I)*AVQ3(I))/(NTRAJ-1)
+             ERQ3(I)=SQRT(ERQ3(I))
+             OUTIME3=OUTIME2+(NTIME*I*DELTAT)
+c        Output of results 
+             WRITE(8,4) RSR(I),OUTIME3,AVQ3(I),ERQ3(I)
+36       CONTINUE
+
+         QAV1=QAV1/NTRAJ
+         QER1=QER1/NTRAJ
+         QER1=(QER1-QAV1*QAV1)/(NTRAJ-1)
+         QER1=SQRT(QER1)
+ 
+         QAV3=QAV3/NTRAJ
+         QER3=QER3/NTRAJ
+         QER3=(QER3-QAV3*QAV3)/(NTRAJ-1)
+         QER3=SQRT(QER3)
+
+         FWAV1=FWAV1/NTRAJ
+         FWER1=FWER1/NTRAJ
+         FWER1=(FWER1-FWAV1*FWAV1)/(NTRAJ-1)
+         FWER1=SQRT(FWER1)
+        
+         FWAV3=FWAV3/NTRAJ
+         FWER3=FWER3/NTRAJ
+         FWER3=(FWER3-FWAV3*FWAV3)/(NTRAJ-1)
+         FWER3=SQRT(FWER3)
+        
+
 1000  CONTINUE 
-C 
+
+      AVW=0.D0
+      ERW=0.D0
+      AW=0.D0
+      VW=0.D0
+
+      DO 92 ITRAJ=1,NTRAJ
+          WORK2(ITRAJ)=FWAV3-FWAV1-WORK2(ITRAJ)
+          WRITE(11,29) ITRAJ,WORK2(ITRAJ)
+          MEW=EXP(-WORK2(ITRAJ))
+          AVW=AVW+(MEW)
+          ERW=ERW+(MEW*MEW)
+          AW=AW+(WORK2(ITRAJ))
+          VW=VW+(WORK2(ITRAJ)*WORK2(ITRAJ))
+
+92    CONTINUE
+
+      AVW=AVW/NTRAJ
+      ERW=ERW/NTRAJ
+      ERW=(ERW-AVW*AVW)/(NTRAJ-1)
+      ERW=SQRT(ERW)
+
+      AW=AW/NTRAJ
+      VW=VW/NTRAJ
+      VW=(VW-AW*AW)/(NTRAJ-1)
+      VW=SQRT(VW)
+
+
+      DELF=-LOG(AVW)
+      ER_DELF=ERW/AVW
+
+      WDIS=AW-DELF
+      ER_WDIS=(VW*VW)+(ER_DELF*ER_DELF)
+      ER_WDIS=SQRT(ER_WDIS)
 
       CALL CPU_TIME(ENDTIME)
 
-      WRITE(*,*) "SHEAR RATE TO BE WRITTEN : ",SR
+      WRITE(*,*) "SHEAR RATE TO BE WRITTEN : ",SR2
+      WRITE(112,23) ISEED
+
+c      WRITE(*,*) "CF1,CF2"
+c      WRITE(*,45) CF1
+c      WRITE(*,45) CF2
 
       BACKSPACE (UNIT=1)
-      WRITE (1,3) Z,RMU,B,SR,E,H0,THI,NFLOW,ENDTIME-STARTTIME
-3     FORMAT(F5.1,2X,F4.1,4X,F8.1,6X,F8.2,6X,F5.2,
-     &2X,F5.2,2X,F5.2,4X,I1,F10.1)
+      WRITE (1,3) Z,RMU,B,SR1,SR2,CIV,ETA_S,B_RAD,THI,INPAR,NFLOW,
+     &(ENDTIME-STARTTIME)
+3     FORMAT(F5.1,2X,F4.1,4X,F8.1,6X,F8.2,6X,F8.2,6X,F5.2,
+     &4X,F5.2,4X,F5.2,4X,F5.2,4X,I1,4X,I1,4X,F10.1)
+      WRITE(1,*) "     "
+      WRITE(1,'(23A)')'## Z',TAB,'RMU',TAB,'B',TAB,'SR1',TAB,'SR2',
+     &TAB,'KIV',TAB,'ETA_S',TAB,'B_RAD',TAB,'THI',TAB,'INPAR',
+     &TAB,'NFLOW',TAB,'EXEC.TIME ##'
+      WRITE(1,'(1A,F5.2)')'## IV PARAMETER, \epsilon     : ',E
+      WRITE(1,'(1A,F5.2)')'## HI PARAMETER, h*           : ',H0
+
+      WRITE(10,'(1A,I10)') 'NO. OF TRAJECTORIES   : ',NTRAJ
+      WRITE(10,'(1A,F7.5)')'DELTAT                :       ',DELTAT
+      WRITE(10,'(1A,F7.5)')'RAMP RATE             :       ',RAMP
+      WRITE(10,'(1A,F7.2)')'RAMP TIME             :       ',TMAX
+      WRITE(10,'(1A,F8.2)')'Pe_A                  :       ',SR1
+      WRITE(10,'(1A,F8.2)')'RELAXATION IN REG.1   :       ',TEQB
+      WRITE(10,81) '<|Q|> IN REGIME 1     : ',QAV1,'+/-',QER1
+      WRITE(10,81) '<\Chi> IN REGIME 1    : ',FWAV1,'+/-',FWER1
+      WRITE(10,'(1A,F8.2)')'Pe_B                  :       ',SR2
+      WRITE(10,'(1A,F8.2)')'RELAXATION IN REG.3   :       ',TREL
+      WRITE(10,81) '<|Q|> IN REGIME 3     : ',QAV3,'+/-',QER3
+      WRITE(10,81) '<\Chi> IN REGIME 3    : ',FWAV3,'+/-',FWER3
+      WRITE(10,*) "          "
+      WRITE(10,81) '\Delta F              : ',DELF,'+/-',ER_DELF
+      WRITE(10,81) '<W>                   : ',AW,'+/-',VW
+      WRITE(10,81) '<W_dis>               : ',WDIS,'+/-',ER_WDIS
+
+22    FORMAT(F4.2,2X,F7.5,2X,F8.5,2X,F8.5,2X,F8.5,2X,F8.5,2X,F12.5,
+     &2X,F12.5)
+
+      WRITE(10,*) "          "
+      WRITE(10,'(15A)')'## SR1 ',TAB,'DELTAT',TAB,'XI',TAB,'ER_XI',TAB,
+     &'XF',TAB,'ER_XF',TAB,'DEL_F',TAB,'ER_DEL_F'
+      WRITE(10,*) "          "
+      WRITE(10,22) SR1,DELTAT,(QAV1/SQRT(B)),(QER1/SQRT(B)),
+     &(QAV3/SQRT(B)),(QER3/SQRT(B)),DELF,ER_DELF
+     
+c      WRITE(*,*) AVW,ERW
+
       CLOSE (UNIT=1)
       close (unit=2) 
+c      close (unit=3)
+      close (UNIT=91)
       CLOSE (UNIT=7)
-      CLOSE (UNIT=89)
-      CLOSE (UNIT=113)
-1100  STOP
+      close (UNIT=8)
+      CLOSE (UNIT=112)
+      CLOSE (UNIT=10)
+      CLOSE (UNIT=11) 
 
+1100  STOP
 C 
       open (unit=15, file='q2.dat')
       open (unit=2, file='tstep.dat')
       open (unit=1, file='inp.dat')
 
       open (unit=40, file='q2x.dat',status='UNKNOWN')
-      READ (1,*) Z,RMU,B,SR,E,H0,THI 
+      READ (1,*) Z,RMU,B,SR,E,B_RAD,THI 
       READ (2,*) NTIWID, NTRAJ
 
 1     FORMAT(F11.8,4X,F8.4,4X,F16.12,4X,F16.12)
@@ -279,9 +656,7 @@ c     Q2 VALUES
 
       DO 31 J=1,NTIWID
         DO 31 I=1,NOUT
-c         write(*,*) I,J
          READ(15,*) TEMP1(J,I),OUTIME(I),TEMP2(J,I),TEMP3(J,I)
-c         WRITE(*,*) TEMP1(J,I),OUTIME(I),TEMP2(J,I),TEMP3(J,I)
 
 31    CONTINUE
 
@@ -316,51 +691,28 @@ C
          ALIOPT=0.D0
          VLIOPT=0.D0
       ENDIF
-      WRITE (40,2) SR, E , H0, OUTIME(I), YOPT, SIGOPT, NOPT, NDUOPT,
+      WRITE (40,2) SR, E , B_RAD, OUTIME(I), YOPT, SIGOPT, NOPT, NDUOPT,
      &' of ', NTIWID, ALIOPT,' +- ',VLIOPT
 33    CONTINUE
 
-c1100  STOP 
-
-
-
       close (unit=15)
-      close (unit=16)
-      close (unit=17)
-      close (unit=18)
-      close (unit=19)
-      close (unit=20)
-      close (unit=21)
-
       close (unit=40)
-      close (unit=41)
-      close (unit=42)
-      close (unit=43)
-      close (unit=44)
-      close (unit=45)
-      close (unit=46)
-
       close (unit=1)
       close (unit=2)
 
-
-
-
-c1100  STOP 
+C1100  STOP 
 
 
       END 
-C 
-
-
-
-
+ 
+c
+c
 
       SUBROUTINE HISET(Y)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       COMMON /STEPBL/ THI,B,ZMU,RMU2,BAUXQ,BAUXR,DTH,DTQ,SRDT,
      &SRDTH,C1P,C2P,E,AMPL2,BETA,AB,A2,A4,AUX1,AUX2,
-     &AUX3,AUX4,AUX5,S,QALPH,GEE1,GEE2,GEE3,GEE4,FKAPPA(3,3),COEFF(4)  
+     &AUX3,AUX4,AUX5,S,QALPH,GEE1,GEE2,GEE3,GEE4,FKAPPA(3,3),COEFF(4) 
        
       DATA C23/0.6666666666666667D0/
       DATA C43/1.3333333333333333D0/
@@ -430,14 +782,15 @@ C     RES=S-B=A-r
  
       RETURN
       END
-
+c
       SUBROUTINE SEMIMP(Q)
-C     Time step: semi-implicit predictor-corrector scheme for FENE+IV model
+C     Time step: semi-implicit predictor-corrector scheme for FENE+IV
+C     model
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (FOURPI=12.5663706143591725D0)
       COMMON /STEPBL/ THI,B,ZMU,RMU2,BAUXQ,BAUXR,DTH,DTQ,SRDT,
      &SRDTH,C1P,C2P,E,AMPL2,BETA,AB,A2,A4,AUX1,AUX2,
-     &AUX3,AUX4,AUX5,S,QALPH,GEE1,GEE2,GEE3,GEE4,FKAPPA(3,3),COEFF(4) 
+     &AUX3,AUX4,AUX5,S,QALPH,GEE1,GEE2,GEE3,GEE4,FKAPPA(3,3),COEFF(4)
 
       DATA C23/0.6666666666666667D0/
       DATA C43/1.3333333333333333D0/
@@ -459,9 +812,6 @@ c     DEFINING VARIABLES FOR MARKO-SIGGIA
           KDQ(I)=0.D0
           KDQAUX(I)=0.D0
 179   CONTINUE
-
-
-
 
 c      WRITE(*,*) "REACHED SI"
 C     B_D refers to the square root of the diffusion tensor
@@ -598,16 +948,15 @@ c     INITIAL GUESS
       IF(G < 1.D0) THEN
           R=G/(1.D0+AI)
       ENDIF
- 
+
       IF(G>100.D0) THEN
 c     DON'T POLISH ROOT IF G>100
           R=R
       ELSE
           CALL POLISH_POLY_ROOT(COEFF,R,1.D-06)
-      ENDIF      
+      ENDIF
 
 c     YADA
-c     Rescaling to obtain the proper length 
       RED=R/G
       Q(1)=RED*Q(1)
       Q(2)=RED*Q(2)
@@ -615,7 +964,8 @@ c     Rescaling to obtain the proper length
       RETURN
       END
 
-
+c
+C 
       SUBROUTINE RANILS(ISEED) 
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C     Choice of ISEED: 0 <= ISEED <= 2000000000 (2E+9); 
@@ -1092,3 +1442,4 @@ c             SIGN(A,B) = SGN(B)*MOD(A)
 C      WRITE(*,*) "YAY",X
       RETURN
       END
+
